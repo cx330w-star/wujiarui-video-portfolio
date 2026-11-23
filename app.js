@@ -32,28 +32,66 @@ function makeFilm(work) {
 for(const work of works)document.querySelector('#'+work.group+'-grid').append(makeFilm(work));
 for(const el of document.querySelectorAll('[data-duration]')){const sec=Math.round(durations[el.dataset.duration]||0);el.textContent=Math.floor(sec/60)+':'+pad(sec%60);}
 const dialog=document.querySelector('#media-dialog');const content=document.querySelector('#dialog-content');const dialogTitle=document.querySelector('#dialog-title');let lastFocus=null;
+const MEDIA_VERSION='20261123-fast2';
+let stopPlayback=()=>{};
 function openDialog(title) {
+ stopPlayback();stopPlayback=()=>{};
  lastFocus=document.activeElement;content.replaceChildren();dialogTitle.textContent=title;
  if(!dialog.open)dialog.showModal();document.body.style.overflow='hidden';
 }
 function openVideo(id) {
  const work=works.find(w=>w.id===Number(id));if(!work)return;
  openDialog(work.title);
- const video=document.createElement('video');video.controls=true;video.playsInline=true;video.preload='metadata';video.poster=`image-${pad(work.image)}.webp`;video.src=`video-${pad(work.id)}.mp4`;video.setAttribute('aria-label',work.title);
- const fallback=document.createElement('p');fallback.className='media-fallback';
- const link=document.createElement('a');link.href=video.src;link.target='_blank';link.rel='noopener';link.textContent='单独打开视频';fallback.append('若播放异常，可 ',link);
- content.append(video,fallback);
- video.addEventListener('error',()=>{if(content.querySelector('.media-status'))return;const p=document.createElement('p');p.className='media-status';p.textContent='视频暂时未能加载，请检查网络或单独打开视频。';content.append(p);});
- video.play().catch(()=>{});
+ const clipUrl=(kind,fresh=false)=>`${kind}-${pad(work.id)}.mp4?v=${MEDIA_VERSION}${fresh?'&retry='+Date.now():''}`;
+ const video=document.createElement('video');video.controls=true;video.playsInline=true;video.setAttribute('webkit-playsinline','');video.preload='auto';video.width=540;video.height=960;video.poster=`image-${pad(work.image)}.webp`;video.setAttribute('aria-label',work.title);
+ const stage=document.createElement('div');stage.className='media-stage';
+ const loading=document.createElement('div');loading.className='media-loading';loading.setAttribute('aria-hidden','true');
+ const bubble=document.createElement('div');bubble.className='media-loading-bubble';
+ const spinner=document.createElement('span');spinner.className='media-spinner';
+ const loadingText=document.createElement('span');loadingText.textContent='正在加载视频…';bubble.append(spinner,loadingText);loading.append(bubble);stage.append(video,loading);
+ const feedback=document.createElement('div');feedback.className='media-feedback';
+ const status=document.createElement('span');status.className='media-status-note';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent='正在加载流畅版…';
+ const retry=document.createElement('button');retry.type='button';retry.className='media-retry';retry.textContent='重新加载';retry.hidden=true;
+ const manualPlay=document.createElement('button');manualPlay.type='button';manualPlay.className='media-manual-play';manualPlay.textContent='点击播放';manualPlay.hidden=true;
+ const standard=document.createElement('a');standard.href=clipUrl('video');standard.target='_blank';standard.rel='noopener';standard.textContent='标准画质';standard.setAttribute('aria-label','以标准画质单独打开：'+work.title);
+ const direct=document.createElement('a');direct.href=clipUrl('preview');direct.target='_blank';direct.rel='noopener';direct.textContent='单独打开';direct.setAttribute('aria-label','单独打开流畅版：'+work.title);
+ feedback.append(status,manualPlay,retry,standard,direct);content.append(stage,feedback);
+ let slowTimer;let disposed=false;let attempt=0;
+ const clearSlow=()=>clearTimeout(slowTimer);
+ const showLoading=(message)=>{
+  if(disposed)return;loading.hidden=false;loadingText.textContent=message;status.textContent=message;clearSlow();
+  slowTimer=setTimeout(()=>{if(disposed||video.ended)return;status.textContent='加载较慢，可重新加载或单独打开视频。';retry.hidden=false;},8000);
+ };
+ const ready=()=>{if(disposed)return;loading.hidden=true;clearSlow();retry.hidden=true;status.textContent=video.paused?'视频已就绪，点击播放':'流畅播放';};
+ const failed=()=>{if(disposed)return;clearSlow();loading.hidden=true;manualPlay.hidden=true;retry.hidden=false;status.textContent='视频暂时未能加载，请重试或单独打开。';};
+ const play=()=>{
+  const current=++attempt;
+  try{const result=video.play();if(result&&result.catch)result.catch(error=>{
+   if(disposed||current!==attempt)return;
+   if(error.name==='NotAllowedError'){loading.hidden=true;clearSlow();manualPlay.hidden=false;status.textContent='请点击播放按钮开始观看。';}
+   else if(error.name!=='AbortError')failed();
+  });}catch{failed();}
+ };
+ video.addEventListener('loadstart',()=>showLoading('正在加载流畅版…'));
+ video.addEventListener('waiting',()=>showLoading('正在缓冲…'));
+ video.addEventListener('stalled',()=>{if(!video.ended&&video.readyState<3)showLoading('正在缓冲…');});
+ video.addEventListener('loadeddata',ready);video.addEventListener('canplay',ready);
+ video.addEventListener('playing',()=>{ready();manualPlay.hidden=true;});
+ video.addEventListener('ended',()=>{ready();status.textContent='播放结束，可使用播放器再次观看。';});
+ video.addEventListener('error',failed);
+ manualPlay.addEventListener('click',()=>{manualPlay.hidden=true;showLoading('正在播放…');play();});
+ retry.addEventListener('click',()=>{retry.hidden=true;manualPlay.hidden=true;video.pause();showLoading('正在重新加载…');video.src=clipUrl('preview',true);direct.href=video.src;video.load();play();});
+ stopPlayback=()=>{disposed=true;attempt++;clearSlow();video.pause();video.removeAttribute('src');video.load();};
+ showLoading('正在加载流畅版…');video.src=clipUrl('preview');video.load();play();
 }
 function closeDialog(){if(dialog.open)dialog.close();}
 dialog.querySelector('.close-button').addEventListener('click',closeDialog);
 dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDialog();}});
-dialog.addEventListener('close',()=>{const video=content.querySelector('video');if(video){video.pause();video.removeAttribute('src');video.load();}content.replaceChildren();document.body.style.overflow='';lastFocus?.focus({preventScroll:true});});
+dialog.addEventListener('close',()=>{stopPlayback();stopPlayback=()=>{};content.replaceChildren();document.body.style.overflow='';lastFocus?.focus({preventScroll:true});});
 let toastTimer;
 function toast(message){const el=document.querySelector('.toast');el.textContent=message;el.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.hidden=true,2600);}
 async function copyText(value,label){try{await navigator.clipboard.writeText(value);toast(label+'已复制');}catch{const area=document.createElement('textarea');area.value=value;area.style.cssText='position:fixed;left:-9999px;';document.body.append(area);area.select();let ok=false;try{ok=document.execCommand('copy');}catch{}area.remove();if(ok){toast(label+'已复制');return;}openDialog('复制'+label);const wrap=document.createElement('div');wrap.className='copy-fallback';const p=document.createElement('p');p.textContent='请长按或选中下面的内容进行复制。';const field=document.createElement('input');field.value=value;field.readOnly=true;field.setAttribute('aria-label',label);wrap.append(p,field);content.append(wrap);field.focus();field.select();}}
 document.addEventListener('click',e=>{const trigger=e.target.closest('[data-video],[data-image],[data-copy]');if(!trigger)return;if(trigger.dataset.video){openVideo(trigger.dataset.video);}else if(trigger.dataset.image){openDialog(trigger.dataset.title||'查看图片');const img=document.createElement('img');img.src=trigger.dataset.image;img.alt=trigger.dataset.title||'作品过程图';content.append(img);}else if(trigger.dataset.copy){copyText(trigger.dataset.copy,'微信号');}});
-document.querySelector('#share-button').addEventListener('click',()=>copyText(location.protocol==='file:'?'https://cx330w-star.github.io/wujiarui-video-portfolio/':location.origin+location.pathname,'作品集链接'));
+document.querySelector('#share-button').addEventListener('click',()=>copyText(location.protocol==='file:'?'https://cx330w-star.github.io/wujiarui-video-portfolio/':location.origin+location.pathname+'?v='+MEDIA_VERSION,'作品集链接'));
 const categoryLinks=[...document.querySelectorAll('.category-nav a')];const sectionIds=categoryLinks.map(a=>a.hash.slice(1));
 if('IntersectionObserver'in window){const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){for(const a of categoryLinks){if(a.hash==='#'+entry.target.id)a.setAttribute('aria-current','true');else a.removeAttribute('aria-current');}}},{rootMargin:'-15% 0px -65% 0px',threshold:0});for(const id of sectionIds)observer.observe(document.getElementById(id));}
